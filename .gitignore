@@ -1,3 +1,31 @@
+# DevelNext dirs
+.dn/
+.gradle/
+build/
+lib/
+src_generated/
+src/.data/img/
+src/.debug/
+src/.forms/
+src/.system/
+src/.theme/
+src/JPHP-INF/
+src/META-INF/
+src/app/forms/
+src/app/modules/MainModule.*
+src/app/modules/AppModule.*
+*.pid
+*.gradle
+*.xml
+*.txt
+*.zip
+*.vk
+*.css
+*cookies.*
+*.dnproject
+*.debug
+debug.*
+
 # Windows image file caches
 Thumbs.db
 ehthumbs.db
