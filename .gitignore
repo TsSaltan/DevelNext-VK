@@ -11,7 +11,7 @@ src/.system/
 src/.theme/
 src/JPHP-INF/
 src/META-INF/
-src/app/forms/
+src/app/forms/MainForm.*
 src/app/modules/MainModule.*
 src/app/modules/AppModule.*
 *.pid
