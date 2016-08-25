@@ -118,310 +118,329 @@ use action\Media;
 use action\Score; 
 
 class vkModule {
-	
-	const LOG = true;
-	private static	// Если есть своё приложение, поменяйте параметры $appID и $appSecret
-					$appID = '5119526',
-					$appSecret = 'QFWVrezg1DAypE6vCqFj',
-					
-					// Файл, в котором хранится access_token
-					$tokenFile = './cache.vk',
-					$accessToken = 'false',
-					$apiVersion = '5.53',
+    
+    const LOG = false;
+    private static    // Если есть своё приложение, поменяйте параметры $appID и $appSecret
+                    $appID = '5119526',
+                    $appSecret = 'QFWVrezg1DAypE6vCqFj',
+                    
+                    // Файл, в котором хранится access_token
+                    $tokenFile = './cache.vk',
+                    $accessToken = 'false',
+                    $apiVersion = '5.53',
 
-					// Конфиги для загрузки фото
-					$uploadImageConfig = [
-						'photos.save' => ['method' => 'photos.getUploadServer', 'upload' => ['album_id', 'group_id'], 'POST' => 'file1'],
-						'photos.saveWallPhoto' => ['method' => 'photos.getWallUploadServer', 'upload' => ['group_id'], 'POST' => 'photo'],
-						'photos.saveOwnerPhoto' => ['method' => 'photos.getOwnerPhotoUploadServer', 'upload' => ['owner_id'], 'POST' => 'photo'], // * //
-						'photos.saveMessagesPhoto' => ['method' => 'photos.getMessagesUploadServer', 'upload' => [], 'POST' => 'photo'],
-						'messages.setChatPhoto' => ['method' => 'photos.getChatUploadServer', 'upload' => ['chat_id'], 'POST' => 'file'], // * //
-					];
-	private function Log($data){
-        if(self::LOG) Logger::Debug('[VK] ' . var_export($data, true));
+                    // Конфиги для загрузки фото
+                    $uploadImageConfig = [
+                        'photos.save' => ['method' => 'photos.getUploadServer', 'upload' => ['album_id', 'group_id'], 'POST' => 'file1'],
+                        'photos.saveWallPhoto' => ['method' => 'photos.getWallUploadServer', 'upload' => ['group_id'], 'POST' => 'photo'],
+                        'photos.saveOwnerPhoto' => ['method' => 'photos.getOwnerPhotoUploadServer', 'upload' => ['owner_id'], 'POST' => 'photo'], // * //
+                        'photos.saveMessagesPhoto' => ['method' => 'photos.getMessagesUploadServer', 'upload' => [], 'POST' => 'photo'],
+                        'messages.setChatPhoto' => ['method' => 'photos.getChatUploadServer', 'upload' => ['chat_id'], 'POST' => 'file'], // * //
+                    ];
+    private function Log(){
+        if(self::LOG) Logger::Debug('[VK] ' . var_export(func_get_args(), true));
     }
 
-	private static $longPoll, $lpAbort = false;
-	public static function longPollConnect($callback, $params = false){
-		if(!$params) return self::Query('messages.getLongPollServer', ['use_ssl' => 1, 'need_pts' => 1], function($answer) use ($callback){
-			self::$lpAbort = false;
-			return self::longPollConnect($callback, $answer['response']);
-		});
+    private static $longPoll, $lpAbort = false;
 
-		self::log(['longPollConnect' => $params]);
+    /**
+     * Подключение к long-poll серверу
+     *
+     * @param callable $callback - функция, которая будет вызвана при каком-либо событии
+     */
+    public static function longPollConnect($callback, $params = false){
+        if(!$params) return self::Query('messages.getLongPollServer', ['use_ssl' => 1, 'need_pts' => 1], function($answer) use ($callback){
+            self::$lpAbort = false;
+            return self::longPollConnect($callback, $answer['response']);
+        });
 
-		$func = function() use ($params, $callback){
-			self::Query(null, [], function($answer) use ($params, $callback){
-				if(self::$lpAbort === true){
-					self::$lpAbort = false;
-					return;
-				} 
+        self::log(['longPollConnect' => $params]);
 
-				if(isset($answer['failed'])) return self::longPollConnect($callback, false); 
+        $func = function() use ($params, $callback){
+            self::Query(null, [], function($answer) use ($params, $callback){
+                if(self::$lpAbort === true){
+                    self::$lpAbort = false;
+                    return;
+                } 
 
-				UXApplication::runLater(function() use ($callback, $answer){
-					$callback($answer['updates']);
-				});
+                if(isset($answer['failed'])) return self::longPollConnect($callback, false); 
 
-				$params['ts'] = $answer['ts'];
-				return self::longPollConnect($callback, $params);
-			}, 
-			[
-				'url' => 'https://'.$params['server'].'?act=a_check&key='.$params['key'].'&ts='.$params['ts'].'&wait=25&mode=2',
-				'connectTimeout' => 10000,
-				'readTimeout' => 35000
-			]);
-		};
+                UXApplication::runLater(function() use ($callback, $answer){
+                    $callback($answer['updates']);
+                });
 
-		self::$longPoll = new Thread($func);
-		self::$longPoll->start();
-	}
+                $params['ts'] = $answer['ts'];
+                return self::longPollConnect($callback, $params);
+            }, 
+            [
+                'url' => 'https://'.$params['server'].'?act=a_check&key='.$params['key'].'&ts='.$params['ts'].'&wait=25&mode=2',
+                'connectTimeout' => 10000,
+                'readTimeout' => 35000
+            ]);
+        };
 
-	public static function longPollDisconnect(){
-		if(self::$longPoll instanceof Thread and !self::$longPoll->isInterrupted()) self::$longPoll->interrupt();
-		self::$longPoll = null;
-		self::$lpAbort = true;
-	}
+        self::$longPoll = new Thread($func);
+        self::$longPoll->start();
+    }
 
-	/**
-	 * Загрузка и сохранение изображения на сервере ВК
-	 * (Если передан параметр $callback, запрос будет выполнен асинхронно)
-	 *
-	 * @param string $method - метод вк (photos.save, photos.saveWallPhoto, photos.saveOwnerPhoto, photos.saveMessagesPhoto, messages.setChatPhoto)
-	 * @param string $file - путь к загружаемому изображению
-	 * @param string $filepath - путь к загружаемому файлу
-	 * @param array $params - параметры для загрузки
-	 * @param callable $callback - функция, которая будет вызвана по окончанию запроса
-	 **/
-	public static function uploadImage($method, $file, $params = [], $callback = false, $jParams = []){
-		if(!isset(self::$uploadImageConfig[$method])) return false;
-		$config = self::$uploadImageConfig[$method];
+    /**
+     * Отключение от long-poll сервера
+     **/
+    public static function longPollDisconnect(){
+        if(self::$longPoll instanceof Thread and !self::$longPoll->isInterrupted()) self::$longPoll->interrupt();
+        self::$longPoll = null;
+        self::$lpAbort = true;
+    }
 
-		$thread = new Thread(function() use ($config, $method, $file, $params, $callback, $jParams){
-			// Step 1 - get upload server
-			$usMethod = $config['method'];
-			$usParams = [];
-			
-			foreach($params as $k=>$v){
-				if(in_array($k, $config['upload'])){
-					$usParams[$k] = $v;
-				}
-			}
+    /**
+     * Загрузка и сохранение изображения на сервере ВК
+     * (Если передан параметр $callback, запрос будет выполнен асинхронно)
+     *
+     * @param string $method - метод вк (photos.save, photos.saveWallPhoto, photos.saveOwnerPhoto, photos.saveMessagesPhoto, messages.setChatPhoto)
+     * @param string $file - путь к загружаемому изображению
+     * @param string $filepath - путь к загружаемому файлу
+     * @param array $params - параметры для загрузки
+     * @param callable $callback - функция, которая будет вызвана по окончанию запроса
+     **/
+    public static function uploadImage($method, $file, $params = [], $callback = false, $jParams = []){
+        if(!isset(self::$uploadImageConfig[$method])) return false;
+        $config = self::$uploadImageConfig[$method];
 
-			$server = self::Query($usMethod, $usParams)['response'];
+        $thread = new Thread(function() use ($config, $method, $file, $params, $callback, $jParams){
+            // Step 1 - get upload server
+            $usMethod = $config['method'];
+            $usParams = [];
+            
+            foreach($params as $k=>$v){
+                if(in_array($k, $config['upload'])){
+                    $usParams[$k] = $v;
+                }
+            }
 
-			// Step 2 - upload file
-			$uResult = self::Upload($server['upload_url'], $config['POST'], $file);
+            $server = self::Query($usMethod, $usParams)['response'];
 
-			// Step 3 - save uploaded file
-			$save = self::Query($method, array_merge($params, $uResult));
+            // Step 2 - upload file
+            $uResult = self::Upload($server['upload_url'], $config['POST'], $file);
 
-			if(is_callable($callback))$callback($save);
-		});
+            // Step 3 - save uploaded file
+            $save = self::Query($method, array_merge($params, $uResult));
 
-		$thread->start();
-	}
+            if(is_callable($callback))$callback($save);
+        });
 
-	/**
-	 * Загрузка файла на сервер ВК
-	 *
-	 * @param string $server - сервер, куда будет загружен файл
-	 * @param string $field - имя поля
-	 * @param string $filepath - путь к загружаемому файлу
-	 * @param callable $callback - функция, которая будет вызвана по окончанию запроса
-	 **/
-	public static function Upload($server, $field, $filepath, $callback = false){
-		$uploadParams = [
-			'url' => $server,
-			'postFiles' => [$field => $filepath]
-		];
-		return self::Query('none', [], $callback, $uploadParams);
-	}
+        $thread->start();
+    }
 
-	/**
-	 * Выполнение запроса. (Если передан параметр $callback, запрос будет выполнен асинхронно)
-	 *
-	 * @param string $method - метод VK API https://vk.com/dev/methods
-	 * @param array $params - массив с параметрами
-	 * @param callable $callback=false - функция, которая будет вызвана по окончанию запроса
-	 * 
-	 * @example vkModule::Query('users.get', ['fields'=>'photo_100'], function($answer){ });
-	 **/
-	public static function Query($method, $params = [], $callback = false, $jParams = [])
-	{		
-		$params['v'] = self::$apiVersion;
-						
-		if(self::$accessToken){
-			$params['access_token'] = self::$accessToken;
-		}
-						
-		$url = 'https://api.vk.com/method/'.$method.'?'.http_build_query($params);
+    /**
+     * Загрузка файла на сервер ВК
+     *
+     * @param string $server - сервер, куда будет загружен файл
+     * @param string $field - имя поля
+     * @param string $filepath - путь к загружаемому файлу
+     * @param callable $callback - функция, которая будет вызвана по окончанию запроса
+     **/
+    public static function Upload($server, $field, $filepath, $callback = false){
+        $uploadParams = [
+            'url' => $server,
+            'postFiles' => [$field => $filepath]
+        ];
+        return self::Query('none', [], $callback, $uploadParams);
+    }
 
-		$connect = new jURL($url);
-		$connect->setOpts($jParams);
-		if(is_callable($callback)){
-			$connect->asyncExec(function($content, $connect) use ($method, $params, $callback, $jParams){
-				$result = self::processResult($content, $connect, $method, $params, $callback, $jParams);
-				if($result !== false) $callback($result);
-			});
-		} else {
-			$content = $connect->exec();
-			return self::processResult($content, $connect, $method, $params, $callback, $jParams);
-		}
-	}
+    /**
+     * Выполнение запроса 
+     * (Если передан параметр $callback, запрос будет выполнен асинхронно)
+     *
+     * @param string $method - метод VK API https://vk.com/dev/methods
+     * @param array $params - массив с параметрами
+     * @param callable $callback=false - функция, которая будет вызвана по окончанию запроса
+     * 
+     * @example vkModule::Query('users.get', ['fields'=>'photo_100'], function($answer){ });
+     **/
+    public static function Query($method, $params = [], $callback = false, $jParams = [])
+    {        
+        $params['v'] = self::$apiVersion;
+                        
+        if(self::$accessToken){
+            $params['access_token'] = self::$accessToken;
+        }
+                        
+        $url = 'https://api.vk.com/method/'.$method.'?'.http_build_query($params);
 
-	private static function processResult($content, $connect, $method, $params, $callback, $jParams){
-		try {
-			$errors = $connect->getError();
-			if($errors !== false){
-				throw new vkException('Невозможно совершить запрос', -1, $errors);
-			}
+        $connect = new jURL($url);
+        $connect->setOpts($jParams);
+        if(is_callable($callback)){
+            $connect->asyncExec(function($content, $connect) use ($method, $params, $callback, $jParams){
+                $result = self::processResult($content, $connect, $method, $params, $callback, $jParams);
+                if($result !== false) $callback($result);
+            });
+        } else {
+            $content = $connect->exec();
+            return self::processResult($content, $connect, $method, $params, $callback, $jParams);
+        }
+    }
 
-			$json = new JsonProcessor(JsonProcessor::DESERIALIZE_AS_ARRAYS);
-			$data = $json->parse($content);
+    private static function processResult($content, $connect, $method, $params, $callback, $jParams){
+        try {
+            $errors = $connect->getError();
+            if($errors !== false){
+                throw new vkException('Невозможно совершить запрос', -1, $errors);
+            }
 
-			self::log([$url=>$data]);
-				 
-						
-			if(isset($data['error'])){
-				throw new vkException($data['error']['error_msg'], $data['error']['error_code'], $data);
-				return false;
-			}
+            $json = new JsonProcessor(JsonProcessor::DESERIALIZE_AS_ARRAYS);
+            $data = $json->parse($content);
 
-			return $data;
-	    	
-		}catch(vkException $e){
-			UXApplication::runLater(function () use ($e, $method, $params, $callback, $jParams) {
-				switch($e->getCode()){
-					//api.vk.com недоступен, обычно из-за частых запросов
-					case -2:
-						wait(500);
-						
-					break;	
-					
-					case 5://Просроченный access_token
-					case 10://Ошибка авторизации
-						UXDialog::show('Вам необходимо повторно авторизоваться', 'ERROR');
-						self::logout();
-						return self::checkAuth(function(){
-							self::Query($method, $params, $callback, $jParams);
-						});
-					break;	
-						//Нужно ввести капчу
-					case 14:
-						$result = $e->getData();
+            self::log([$url=>$data]);
+                 
+                        
+            if(isset($data['error'])){
+                throw new vkException($data['error']['error_msg'], $data['error']['error_code'], $data);
+                return false;
+            }
 
-						$vkCaptcha = app()->getForm('vkCaptcha');
-						$vkCaptcha->setUrl($result['error']['captcha_img']);
-        				$vkCaptcha->showAndWait();
+            return $data;
+            
+        }catch(vkException $e){
+            UXApplication::runLater(function () use ($e, $method, $params, $callback, $jParams) {
+                switch($e->getCode()){
+                    //api.vk.com недоступен, обычно из-за частых запросов
+                    case -2:
+                        wait(500);
+                        
+                    break;    
+                    
+                    case 5://Просроченный access_token
+                    case 10://Ошибка авторизации
+                        UXDialog::show('Вам необходимо повторно авторизоваться', 'ERROR');
+                        self::logout();
+                        return self::checkAuth(function(){
+                            self::Query($method, $params, $callback, $jParams);
+                        });
+                    break;    
+                        //Нужно ввести капчу
+                    case 14:
+                        $result = $e->getData();
 
-						$params['captcha_sid'] = $result['error']['captcha_sid'];
-						$params['captcha_key'] = $vkCaptcha->input->text;
-					break;	
+                        $vkCaptcha = app()->getForm('vkCaptcha');
+                        $vkCaptcha->setUrl($result['error']['captcha_img']);
+                        $vkCaptcha->showAndWait();
 
-					default:
-						return UXDialog::show('Ошибка VK API: '.$e->getMessage().' (code='.$e->getCode().')' . "\n\n\nDebug: " . var_export($e->getData(), true), 'ERROR');
-				}
+                        $params['captcha_sid'] = $result['error']['captcha_sid'];
+                        $params['captcha_key'] = $vkCaptcha->input->text;
+                    break;    
 
-				return self::Query($method, $params, $callback, $jParams);
-			
-    		});
-    	}
+                    default:
+                        return UXDialog::show('Ошибка VK API: '.$e->getMessage().' (code='.$e->getCode().')' . "\n\n\nDebug: " . var_export($e->getData(), true), 'ERROR');
+                }
 
-    	return false;
-	}
-	
-	/**
-	 * Проверяет, авторизован ли текущий пользователь (есть ли сохраненный access_token)
-	 * + автоматически "подбирает" сохранённый access_token
-	 *
-	 * @return bool
-	 **/	 
-	public static function isAuth()
-	{
-		if(file_exists(self::$tokenFile) and $t = file_get_contents(self::$tokenFile) and Str::Length($t) > 85){
-			$token = str::sub($t, 0, 85);
-			$hash = str::sub($t, 85);
+                return self::Query($method, $params, $callback, $jParams);
+            
+            });
+        }
 
-			if(self::getHash($token) == $hash){
-				self::$accessToken = $token;
-				return true;
-			} else {
-				var_dump('invalid hash', [self::getHash($token), $t, $token, $hash]);
-			}
-		}
+        return false;
+    }
+    
+    /**
+     * Проверяет, авторизован ли текущий пользователь (есть ли сохраненный access_token)
+     * + автоматически "подбирает" сохранённый access_token
+     *
+     * @return bool
+     **/     
+    public static function isAuth()
+    {
+        if(file_exists(self::$tokenFile) and $t = file_get_contents(self::$tokenFile) and Str::Length($t) > 85){
+            $token = str::sub($t, 0, 85);
+            $hash = str::sub($t, 85);
 
-		var_dump('invalid', [file_exists(self::$tokenFile), $t = file_get_contents(self::$tokenFile), Str::Length($t) > 85]);
-		return false;
-	}
+            if(self::getHash($token) == $hash){
+                self::$accessToken = $token;
+                return true;
+            } else {
+                self::log('invalid hash', [self::getHash($token), $t, $token, $hash]);
+            }
+        }
 
-	/**
-	 * Проверяет, авторизован ли пользователь, если нет - покажет форму авторизации
-	 **/
-	public static function checkAuth($callback = false){
-		$callback = is_callable($callback) ? $callback : function(){};
+        self::log('invalid', [file_exists(self::$tokenFile), $t = file_get_contents(self::$tokenFile), Str::Length($t) > 85]);
+        return false;
+    }
 
-		if(!self::isAuth()){
-			app()->getForm('vkAuth')->setCallback($callback);
-			app()->getForm('vkAuth')->showAndWait();
-		}
-		else $callback();
-	}
+    /**
+     * Проверяет, авторизован ли пользователь, если нет - покажет форму авторизации
+     **/
+    public static function checkAuth($callback = false){
+        $callback = is_callable($callback) ? $callback : function(){};
 
-	/**
-	 * Деавторизирует пользователя, удаляет access_token
-	 */
-	public static function logout(){
-		self::$accessToken = false;
-		unlink(self::$tokenFile);
-	}
-	
-	/**
-	 * Возвращает ID приложения
-	 * @return string
-	 */
-	public static function getAppID(){
-		return self::$appID;
-	}
+        if(!self::isAuth()){
+            app()->getForm('vkAuth')->setCallback($callback);
+            app()->getForm('vkAuth')->showAndWait();
+        }
+        else $callback();
+    }
 
-	/**
-	 * Возвращает версию API
-	 * @return string
-	 */
-	public static function getApiVersion(){
-		return self::$apiVersion;
-	}
+    /**
+     * Деавторизирует пользователя, удаляет access_token
+     */
+    public static function logout(){
+        self::$accessToken = false;
+        unlink(self::$tokenFile);
+    }
+    
+    /**
+     * Возвращает ID приложения
+     * @return string
+     */
+    public static function getAppID(){
+        return self::$appID;
+    }
 
-	/**
-	 * Устанавливает access_token и сохраняет его в файл
-	 * @return string
-	 */
-	public static function setAccessToken($aToken){
-		self::$accessToken = $aToken;
-		file_put_contents(self::$tokenFile, $aToken . self::getHash($aToken));
-	}
+    /**
+     * Возвращает версию API
+     * @return string
+     */
+    public static function getApiVersion(){
+        return self::$apiVersion;
+    }
 
-	private static function getHash($str){
-		return str::hash($str . self::$appID . self::$appSecret, 'SHA-1');
-	}
+    /**
+     * Устанавливает access_token и сохраняет его в файл
+     */
+    public static function setAccessToken($aToken){
+        self::$accessToken = $aToken;
+        file_put_contents(self::$tokenFile, $aToken . self::getHash($aToken));
+    }
+
+    private static function getHash($str){
+        return str::hash($str . self::$appID . self::$appSecret, 'SHA-1');
+    }
+
+
+        // На случай, если модуль подключён к форме, чтоб не было ошибки
+        public function getScript(){
+            return null;
+        }
+
+        public function apply(){
+            return null;
+        }
 }
 
 
 class vkException extends \Exception{
-	private $data;
-	public function getData(){
-		return $this->data;
-	}
-		
-	public function __construct($message = null, $code = 0, $data = []){
-		$this->data = $data;
-		return parent::__construct($message, $code, null);
-	}
-	
+    private $data;
+    public function getData(){
+        return $this->data;
+    }
+        
+    public function __construct($message = null, $code = 0, $data = []){
+        $this->data = $data;
+        return parent::__construct($message, $code, null);
+    }
+    
 }
 
 if(!function_exists('http_build_query')){
-	function http_build_query($a,$b='',$c=0)
+    function http_build_query($a,$b='',$c=0)
      {
             if (!is_array($a)) return false;
             foreach ((array)$a as $k=>$v)
@@ -446,5 +465,5 @@ if(!function_exists('http_build_query')){
                 $r[]=urlencode($k)."=".urlencode($v);
             }
             return implode("&",$r);
-        	}
+            }
 }
