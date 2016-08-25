@@ -6,7 +6,7 @@ lib/
 src_generated/
 src/.data/img/
 src/.debug/
-src/.forms/
+src/.forms/MainForm.*
 src/.system/
 src/.theme/
 src/JPHP-INF/
