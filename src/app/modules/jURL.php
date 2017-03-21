@@ -1,21 +1,21 @@
 <?php
 namespace app\modules{
-    use php\framework\Logger,
-        php\gui\UXApplication,
-        php\io\File,
-        php\io\FileStream,
-        php\io\MemoryStream,
-        php\io\Stream,
-        php\lang\System,
-        php\lang\Thread,
-        php\lib\Str,
-        php\net\Proxy,
-        php\net\URL,
-        php\net\URLConnection,
-        php\time\Time,
-        php\time\TimeFormat,
-        php\util\Locale,
-        php\util\Regex;
+    use php\framework\Logger;
+    use php\gui\UXApplication;
+    use php\io\File;
+    use php\io\FileStream;
+    use php\io\MemoryStream;
+    use php\io\Stream;
+    use php\lang\System;
+    use php\lang\Thread;
+    use php\lib\Str;
+    use php\net\Proxy;
+    use php\net\URL;
+    use php\net\URLConnection;
+    use php\time\Time;
+    use php\time\TimeFormat;
+    use php\util\Locale;
+    use php\util\Regex;
 
     class jURL
     {
@@ -61,8 +61,8 @@ namespace app\modules{
                 'returnHeaders'     =>    false,    
                 'progressFunction'  =>    null,
                 
-                'inputFile'        =>    false,    // Файл, куда будут записываться данные (вместо того, чтобы их вернуть) // 'fileStream'
-                'outputFile'          =>    false,    // Файл, откуда будут счиываться данные в body // bodyFile
+                'outputFile'        =>    false,    // Файл, куда будут записываться данные (вместо того, чтобы их вернуть) // 'fileStream'
+                'inputFile'          =>    false,    // Файл, откуда будут счиываться данные в body // bodyFile
 
                 'body'              =>    null,     // Отправляемые данные
                 'postData'          =>    [],       // Переформатирут данные в формат query, сохранит их в body
@@ -96,7 +96,7 @@ namespace app\modules{
             $url = new URL($this->opts['url']);
             $cookies = NULL;
             $boundary = Str::random(90);
-            $useBuffer = !(isset($this->opts['inputFile']) and $this->opts['inputFile'] !== false);
+            $useBuffer = !(isset($this->opts['outputFile']) and $this->opts['outputFile'] !== false);
 
             //Если был редирект, ничего не сбрасываем
             if(!$byRedirect){
@@ -173,10 +173,10 @@ namespace app\modules{
                             $this->requestLength += Str::Length($value);
                         break; 
                         
-                        case 'outputFile':
+                        case 'inputFile':
                             $this->log('sendBody -> '.$key);
                             $out = $this->URLConnection->getOutputStream();                            
-                            $fileStream = ($this->opts['outputFile'] instanceof FileStream)?$this->opts['outputFile']:FileStream::of($this->opts['outputFile'], 'r+');
+                            $fileStream = ($this->opts['inputFile'] instanceof FileStream)?$this->opts['inputFile']:FileStream::of($this->opts['inputFile'], 'r+');
                             
                             $this->log('Sending bodyFile, size = ' . $fileStream->length());
 
@@ -485,12 +485,12 @@ namespace app\modules{
          * Установка файла, куда будет сохранён ответ с сервера (например, при скачивании файла)
          * @param string $file - path/to/file
          */
-        public function setInputFile($file){
-            $this->opts['inputFile'] = $file;
+        public function setOutputFile($file){
+            $this->opts['outputFile'] = $file;
         }
         // alias //
         public function setFileStream($file){
-            $this->opts['inputFile'] = $file;
+            $this->opts['outputFile'] = $file;
         }
 
         /**
@@ -498,12 +498,12 @@ namespace app\modules{
          * Установка файла, откуда будут считываться данные в тело запроса (например, при загрузка файла на сервер методом PUT)
          * @param string $file - path/to/file
          */
-        public function setOutputFile($file){
-            $this->opts['outputFile'] = $file;
+        public function setInputFile($file){
+            $this->opts['inputFile'] = $file;
         }
         // alias //
         public function setBodyFile($file){
-            $this->opts['outputFile'] = $file;
+            $this->opts['inputFile'] = $file;
         }
 
         /**
@@ -660,8 +660,8 @@ namespace app\modules{
             $data = $input->read($this->opts['bufferLength']);
             $this->responseLength += Str::Length($data);
 
-            if($this->opts['inputFile'] instanceof FileStream){
-                $this->opts['inputFile']->write($data);
+            if($this->opts['outputFile'] instanceof FileStream){
+                $this->opts['outputFile']->write($data);
             }
             else $this->buffer->write($data);
 
@@ -674,10 +674,10 @@ namespace app\modules{
         private function getInputData(){
             $this->resetBufferParams();
 
-            if(isset($this->opts['inputFile']) and $this->opts['inputFile'] !== false){
-                $this->opts['inputFile'] = ($this->opts['inputFile'] instanceof FileStream) ? $this->opts['inputFile'] : FileStream::of($this->opts['inputFile'], 'w+');
+            if(isset($this->opts['outputFile']) and $this->opts['outputFile'] !== false){
+                $this->opts['outputFile'] = ($this->opts['outputFile'] instanceof FileStream) ? $this->opts['outputFile'] : FileStream::of($this->opts['outputFile'], 'w+');
             }
-            else $this->opts['inputFile'] = false;
+            else $this->opts['outputFile'] = false;
 
             $in = $this->URLConnection->getInputStream();
             $this->loadToBuffer($in);
